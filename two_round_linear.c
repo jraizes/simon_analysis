@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define SAMPLES	1<<27
+#define SAMPLES	1<<28
 #define GETBIT(num, i) (((num) >> (i)) & 01)
 #define GETBITMOD(num, i, m) (((num) >> ((i) + m) % m) & 01)
 
@@ -44,7 +44,7 @@ void printTimeDif(struct timespec start, struct timespec end){
 		nsecs += 1e9;
 	}
 
-	printf("\nTime:%li.%li seconds\n", seconds, nsecs);
+	printf("Time:%li.%li seconds\n", seconds, nsecs);
 }
 
 int main(){
@@ -64,6 +64,7 @@ int main(){
 	printf("\nBit 8:\n");
 	gather(8, plain, cipher, SAMPLES);
 	clock_gettime(CLOCK_MONOTONIC, &end);
+	printf("\n");
 	printTimeDif(start, end);
 
 	free(plain);
