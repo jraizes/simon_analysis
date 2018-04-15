@@ -142,7 +142,7 @@ int main(){
 		k ^= 1;	// bit 0
 		for (uint b = 0; b < 2; b++){
 			k ^= 1 << 2;	// bit 2
-			for (volatile uint c = 0; c < 2; c++){	// STOP OPTIMIZING c AWAY!!!
+			for (uint c = 0; c < 2; c++){
 				k ^= 1 << 7;	// bit 7
 				for (uint d = 0; d < 2; d++){
 					k ^= 1 << 9;	// bit 9
@@ -155,7 +155,7 @@ int main(){
 		}
 	}
 	printf("\n");
-	printf("0x%04x: %f\n", key[5], fabs(gather(4, 0xb649, plain, cipher, SAMPLES)));
+	printf("0x%04x: %f\n", key[5], fabs(gather(4, key[5], plain, cipher, SAMPLES)));
 	clock_gettime(CLOCK_MONOTONIC, &end);
 	printf("\n");
 
