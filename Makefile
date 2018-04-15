@@ -1,7 +1,7 @@
 CFLAGS=-O3 -g
 OBJ=simon.o
 
-test_simon: s$(OBJ) test_simon.c
+test_simon: $(OBJ) test_simon.c
 	gcc test_simon.c simon.o -o test_simon $(CFLAGS)
 
 two_round_linear: $(OBJ) two_round_linear.c
