@@ -10,6 +10,7 @@
 /****** Utilities ******/
 /***********************/
 
+#define CONST32(L, R)	0x##R##L 	// Mildly confusing but it makes things match the stuff in the papers...
 #define SWAP(a, b)	{a^=b; b^=a; a^=b;}
 #define GETBIT(num, i) (((num) >> (i)) & 01)
 #define GETBITMOD(num, i, m) (((num) >> ((i) + m) % m) & 01)
@@ -111,15 +112,24 @@ int compare(const void *a,const void *b) {	// For sorting
 /*****************************/
 /****** Attack Outlines ******/
 /*****************************/
+uint16_t L_DIFF, R_DIFF;
+double RAND;
 
 /* Generates plaintext-ciphertext pairs for a given key */
-void gen_pairs(uint16_t *plain, uint16_t *cipher, uint16_t *key, int num_pairs, int round_num){
-	int tmp;
-	for (int i = 0; i < num_pairs; i++){
+void gen_pairs(uint16_t *plain, uint16_t *cipher, uint16_t *key, int num_samples, int round_num){
+	int tmp, sample;
+	for (int i = 0; i < num_samples; i++){
+		sample = i * 4;
+
 		tmp = rand();	// 32 bits
-		plain[2*i] = cipher[2*i] = tmp;	// First half
-		plain[2*i+1] = cipher[2*i+1] = tmp >> 16;	// Second half
-		reducedEncrypt(cipher + 2 * i, key, 2, round_num);
+		plain[sample] = cipher[sample] = tmp;	// First half
+		plain[sample+1] = cipher[sample+1] = tmp >> 16;	// Second half
+		reducedEncrypt(cipher + sample, key, 2, round_num);
+
+		// Copy and differentiate
+		plain[sample+2] = cipher[sample+2] = plain[sample] ^ L_DIFF;
+		plain[sample+3] = cipher[sample+3] = plain[sample+1] ^ R_DIFF;
+		reducedEncrypt(cipher + sample + 2, key, 2, round_num);
 	}
 }
 
@@ -129,13 +139,12 @@ double gather(char(*eval)(uint16_t*, uint16_t*, uint16_t*), uint16_t* k, uint16_
 
 	// For each plaintext-ciphertext pair, check if it matches the relation given in eval
 	for(int i = 0; i < num_samples; i++){
-		if (eval(plain + 2*i, cipher + 2*i, k)){
+		if (eval(plain + 4*i, cipher + 4*i, k)){
 			count++;
 		}
 	}
 
-	// Return the difference in match percentage from 50%
-	return count / num_samples - 0.5;
+	return count / num_samples;
 }
 
 /* Carries out the attack. */
@@ -143,8 +152,8 @@ void do_atk(char(*eval)(uint16_t*, uint16_t*, uint16_t*), key_iter *it, int roun
 	srand(time(NULL));
 	uint16_t *plain, *cipher;
 	uint16_t key[ROUNDS];
-	plain = calloc(sizeof(uint16_t), num_samples * 2);
-	cipher = calloc(sizeof(uint16_t), num_samples * 2);
+	plain = calloc(sizeof(uint16_t), num_samples * 4);
+	cipher = calloc(sizeof(uint16_t), num_samples * 4);
 
 	// Construct a random key
 	key[0] = rand();
@@ -174,7 +183,8 @@ void do_atk(char(*eval)(uint16_t*, uint16_t*, uint16_t*), key_iter *it, int roun
 	int i = 0;
 	do{
 		memcpy(&(outputs[i].key), it->key, ROUNDS * sizeof(uint16_t));
-		outputs[i].prob = fabs(gather(eval, it->key, plain, cipher, num_samples));	// We only care about magnitude of deviation from 50%
+		outputs[i].prob = gather(eval, it->key, plain, cipher, num_samples);
+		
 		i++;
 	} while(increment(it) != 0);
 	printf("\n");
@@ -206,139 +216,73 @@ void do_atk(char(*eval)(uint16_t*, uint16_t*, uint16_t*), key_iter *it, int roun
 #define SET_ATK(X)	char(*eval)(uint16_t*, uint16_t*, uint16_t*) = eval_##X;	\
 					int num_samples = SAMPLES_##X; 								\
 					int rounds = ROUNDS_##X; 									\
-					key_iter *it = init_##X();
+					key_iter *it = init_##X();									\
+					L_DIFF = L_DIFF_##X;										\
+					R_DIFF = R_DIFF_##X;										
+
 /*
  * Each attack X MUST provide the following:
  *		- char eval_X(uint16_t*, uint16_t*, uint16_t*)
  *		- key_iter *init_X()
  *		- global variable or #define SAMPLES_X
  *		- global variable or #define ROUNDS_X
+ * 		- global variable or #define L_DIFF_X
+ * 		- global variable or #define R_DIFF_X
  */
 
 /*
- * A 6 round attack based on a 3 round linear characteristic with bias 2^-8 (?)
+ * A 5 round attack based on a 3 round linear differential characteristic
  */
 
-#define SAMPLES_1	(1<<20)
-#define ROUNDS_1		6
+#define SAMPLES_1	(1<<10)
+#define ROUNDS_1	5
+#define L_DIFF_1	0
+#define R_DIFF_1	0x40	// 6
 
 char eval_1(uint16_t *plain, uint16_t *cipher, uint16_t* key){
-	uint16_t xp = plain[0];
-	uint16_t xc = cipher[0];
-	uint16_t yp = plain[1];
-	uint16_t yc = cipher[1];
+	uint16_t *Rp = plain;
+	uint16_t *Rc = cipher;
+	uint16_t *Lp = plain + 1;
+	uint16_t *Lc = cipher + 1;
+
+	uint16_t *Rp_flip = plain + 2;
+	uint16_t *Rc_flip = cipher + 2;
+	uint16_t *Lp_flip = plain + 3;
+	uint16_t *Lc_flip = cipher + 3;
+
 	uint16_t zeros = 0;
 
+	uint32_t tmpRc = *((uint32_t*)Rc);
+	uint32_t tmpRc_flip = *((uint32_t*)Rc_flip);
 	// Do a partial decryption
-	R(key + 5, &yc, &xc);
-	R(&zeros, &yc, &xc);	// Strip F off the other side - key doesn't matter
+	R(key + 4, Lc, Rc);
+	R(&zeros, Lc, Rc);
 
-	char lhs = GETBITMOD(yc, 0, 16) ^ GETBITMOD(yc, -2, 16);
-	char rhs = GETBITMOD(yp, 0, 16) ^ GETBITMOD(yp, -6, 16) ^ GETBITMOD(xp, -3, 16)
-			 ^ GETBITMOD(xp, -4, 16) ^ GETBITMOD(xp, -7, 16) ^ GETBITMOD(xp, -8, 16);
+	// Same thing
+	R(key + 4, Lc_flip, Rc_flip);
+	R(&zeros, Lc_flip, Rc_flip);
 
-	return lhs == rhs;
+	uint32_t expected = CONST32(0440, 0100);	// L 6 and 10, R 8
+	uint32_t actual = *((uint32_t*)Rc) ^ *((uint32_t*)Rc_flip);
+
+	*((uint32_t*)Rc) = tmpRc;
+	*((uint32_t*)Rc_flip) = tmpRc_flip;
+	return actual == expected;
 }
 
 key_iter *init_1(){
 	key_iter *ret = calloc(1, sizeof(key_iter));
-	ret->bits[5] = calloc(4, sizeof(int));
-	ret->bits[5][0] = 6;
-	ret->bits[5][1] = 8;
-	ret->bits[5][2] = 13;
-	ret->bits[5][3] = 15;
-	ret->bitslen[5] = 4;
-	ret->totallen = 4;
-	// ret->increment = increment_1;
-	return ret;
-}
 
-
-/*
- * A 6 round attack with a 3 round linear characteristic of bias roughly 2^-6
- */
-#define SAMPLES_2	(1<<14)
-#define ROUNDS_2		6
-
-char eval_2(uint16_t *plain, uint16_t *cipher, uint16_t *key){
-	uint16_t xp = plain[0];
-	uint16_t xc = cipher[0];
-	uint16_t yp = plain[1];
-	uint16_t yc = cipher[1];
-	uint16_t zeros = 0;
-
-	// Do a partial decryption
-	R(key + 5, &yc, &xc);
-	R(&zeros, &yc, &xc);	// Strip F off the other side - key doesn't matter
-
-	char lhs = GETBITMOD(yc, 0, 16);
-	char rhs = GETBITMOD(yp, 0, 16) ^ GETBITMOD(yp, -4, 16)
-		^ GETBITMOD(xp, 4, 16) ^ GETBITMOD(xp, -6, 16) ^ GETBITMOD(xp, -8, 16);
-
-	return lhs == rhs;
-}
-
-key_iter *init_2(){
-	key_iter *ret = calloc(1, sizeof(key_iter));
-	ret->bits[5] = calloc(2, sizeof(int));
-	ret->bits[5][0] = 8;
-	ret->bits[5][1] = 15;
-	ret->bitslen[5] = 2;
-	ret->totallen = 2;
-	// ret->increment = increment_2;
-	return ret;
-}
-
-
-/*
- * A 6 round attack with a 3 round linear characteristic of bias roughly 2^-4.
- */
-
-#define SAMPLES_3	(1<<10)
-#define ROUNDS_3		6
-
-char eval_3(uint16_t *plain, uint16_t *cipher, uint16_t *key){
-	uint16_t xp = plain[0];
-	uint16_t xc = cipher[0];
-	uint16_t yp = plain[1];
-	uint16_t yc = cipher[1];
-	uint16_t zeros = 0;
-
-	// Do a partial decryption
-	R(key + 5, &yc, &xc);
-	R(key + 4, &yc, &xc);
-	R(&zeros, &yc, &xc);
-	SWAP(xc, yc);
-
-	// Bits: (y) 10000000 00000000	(x) 00000000 00000010
-	// weight: 0.060616
-	char lhs = GETBITMOD(xc, -2, 16) ^ GETBITMOD(yc, 0, 16);
-	char rhs = GETBITMOD(xp, -2, 16) ^ GETBITMOD(yp, 0, 16);
-
-	return lhs == rhs;
-}
-
-key_iter *init_3(){
-	key_iter *ret = calloc(1, sizeof(key_iter));
-	ret->bits[5] = calloc(7, sizeof(int));
-	ret->bits[5][0] = 4;
-	ret->bits[5][1] = 5;
-	ret->bits[5][2] = 8;
-	ret->bits[5][3] = 11;
-	ret->bits[5][4] = 12;
-	ret->bits[5][5] = 14;
-	ret->bits[5][6] = 15;
-	ret->bitslen[5] = 7;
-
-	ret->bits[4] = calloc(2, sizeof(int));
-	ret->bits[4][0] = 6;
+	ret->bits[4] = calloc(16, sizeof(int));
+	ret->bits[4][0] = 3;
 	ret->bits[4][1] = 13;
-	ret->bitslen[4] = 2;
+	ret->bits[4][2] = 15;
+	ret->bits[4][3] = 1;
+	ret->bitslen[4] = 4;
 
-	ret->totallen = 9;
+	ret->totallen = 4;
 	return ret;
 }
-
 
 
 
